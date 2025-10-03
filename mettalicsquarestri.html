@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>9:16 Metallic Effect Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: none; /* Prevents default touch behaviors like scrolling/zooming on the body */
+        }
+        /* Style for the foreground image shadow */
+        .has-shadow {
+            filter: drop-shadow(0px 10px 15px rgba(0,0,0,0.4));
+        }
+        /* Custom scrollbar for better aesthetics */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #2d3748;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4a5568;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #718096;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 flex items-center justify-center h-screen overflow-hidden">
+
+    <!-- Main container to enforce the 9:16 aspect ratio -->
+    <div class="relative w-full max-w-[calc(100vh*9/16)] h-full max-h-screen shadow-2xl bg-black" id="main-container">
+        <canvas id="metallic-canvas" class="w-full h-full"></canvas>
+        <!-- Foreground image container -->
+        <div id="foreground-container" class="absolute inset-0 flex items-center justify-center p-8 pointer-events-none">
+            <img id="foreground-image" src="" alt="Foreground PNG" class="max-w-full max-h-full object-contain transition-all duration-300" style="display: none;">
+        </div>
+    </div>
+
+    <!-- Floating Controls Panel -->
+    <div id="controls-panel" class="absolute top-4 right-4 bg-gray-800 bg-opacity-80 backdrop-blur-md text-white p-6 rounded-2xl shadow-lg w-96 max-w-[90vw] max-h-[90vh] overflow-y-auto transition-transform duration-300">
+        <h2 class="text-2xl font-bold mb-6 border-b border-gray-600 pb-3">Controls</h2>
+        
+        <!-- Background Effect Controls -->
+        <div class="space-y-5 mb-6">
+            <h3 class="text-lg font-semibold text-cyan-300">Background Effect</h3>
+            <div>
+                <label for="color-picker-start" class="block mb-2 font-medium">Gradient Start Color</label>
+                <div class="relative">
+                    <input type="color" id="color-picker-start" value="#ec4899" class="w-full h-12 p-1 bg-gray-700 rounded-lg cursor-pointer border-2 border-transparent">
+                </div>
+            </div>
+            <div>
+                <label for="color-picker-mid" class="block mb-2 font-medium">Gradient Mid Color</label>
+                <div class="relative">
+                    <input type="color" id="color-picker-mid" value="#f59e0b" class="w-full h-12 p-1 bg-gray-700 rounded-lg cursor-pointer border-2 border-transparent">
+                </div>
+            </div>
+            <div>
+                <label for="color-picker-end" class="block mb-2 font-medium">Gradient End Color</label>
+                <div class="relative">
+                    <input type="color" id="color-picker-end" value="#10b981" class="w-full h-12 p-1 bg-gray-700 rounded-lg cursor-pointer border-2 border-transparent">
+                </div>
+            </div>
+            <div>
+                <label for="grid-size-slider" class="block mb-2 font-medium">Cube Size</label>
+                <input type="range" id="grid-size-slider" min="10" max="50" step="1" value="25" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+            </div>
+        </div>
+        
+        <!-- Foreground Image Controls -->
+        <div class="space-y-5 border-t border-gray-600 pt-6">
+            <h3 class="text-lg font-semibold text-cyan-300">Foreground Image</h3>
+            <div>
+                <label for="image-upload" class="block mb-2 font-medium">Upload PNG Image</label>
+                <input type="file" id="image-upload" accept="image/png" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-cyan-500 file:text-white hover:file:bg-cyan-600 cursor-pointer">
+            </div>
+            <!-- Image controls container - initially hidden -->
+            <div id="image-controls-wrapper" class="space-y-5" style="display: none;">
+                 <div class="flex items-center pt-2">
+                    <input type="checkbox" id="image-toggle" class="w-5 h-5 text-cyan-500 bg-gray-700 border-gray-600 rounded focus:ring-cyan-600 ring-offset-gray-800 focus:ring-2 cursor-pointer">
+                    <label for="image-toggle" class="ml-3 font-medium cursor-pointer">Enable Image</label>
+                </div>
+                <div>
+                    <label for="opacity-slider" class="block mb-2 font-medium">Opacity</label>
+                    <input type="range" id="opacity-slider" min="0" max="1" step="0.01" value="1" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                </div>
+                <div class="flex items-center">
+                    <input type="checkbox" id="shadow-toggle" class="w-5 h-5 text-cyan-500 bg-gray-700 border-gray-600 rounded focus:ring-cyan-600 ring-offset-gray-800 focus:ring-2 cursor-pointer" checked>
+                    <label for="shadow-toggle" class="ml-3 font-medium cursor-pointer">Enable Shadow</label>
+                    <button id="remove-image-btn" class="ml-auto text-sm bg-red-600 hover:bg-red-700 text-white font-bold py-1 px-3 rounded-lg transition-colors">Remove</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Hide Controls Button -->
+         <div class="mt-8 border-t border-gray-600 pt-4">
+            <button id="hide-controls-btn" class="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                Hide Controls
+            </button>
+            <p class="text-xs text-gray-500 text-center mt-2">You can also two-finger tap to toggle controls.</p>
+        </div>
+    </div>
+
+<script>
+    // DOM Element References
+    const canvas = document.getElementById('metallic-canvas');
+    const ctx = canvas.getContext('2d');
+    const colorPickerStart = document.getElementById('color-picker-start');
+    const colorPickerMid = document.getElementById('color-picker-mid');
+    const colorPickerEnd = document.getElementById('color-picker-end');
+    const gridSizeSlider = document.getElementById('grid-size-slider');
+    const imageUpload = document.getElementById('image-upload');
+    const foregroundImage = document.getElementById('foreground-image');
+    const opacitySlider = document.getElementById('opacity-slider');
+    const shadowToggle = document.getElementById('shadow-toggle');
+    const imageToggle = document.getElementById('image-toggle');
+    const imageControlsWrapper = document.getElementById('image-controls-wrapper');
+    const removeImageBtn = document.getElementById('remove-image-btn');
+    const controlsPanel = document.getElementById('controls-panel');
+    const hideControlsBtn = document.getElementById('hide-controls-btn');
+    const mainContainer = document.getElementById('main-container');
+
+    // State variables
+    let colorStart = colorPickerStart.value;
+    let colorMid = colorPickerMid.value;
+    let colorEnd = colorPickerEnd.value;
+    let gridSize = parseInt(gridSizeSlider.value); // Use value from slider
+    let time = 0; // Re-introduce time for animation
+
+    // --- CORE DRAWING LOGIC ---
+
+    function drawEffect() {
+        // 1. Create a master 3-color gradient that rotates over time for continuous movement
+        const angle = time * 0.0001;
+        const x1 = canvas.width / 2 + Math.cos(angle) * canvas.width / 1.5;
+        const y1 = canvas.height / 2 + Math.sin(angle) * canvas.height / 1.5;
+        const x2 = canvas.width / 2 - Math.cos(angle) * canvas.width / 1.5;
+        const y2 = canvas.height / 2 - Math.sin(angle) * canvas.height / 1.5;
+        
+        const masterGradient = ctx.createLinearGradient(x1, y1, x2, y2);
+        masterGradient.addColorStop(0, colorStart);
+        masterGradient.addColorStop(0.5, colorMid);
+        masterGradient.addColorStop(1, colorEnd);
+        
+        ctx.fillStyle = masterGradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 2. Draw the cubical grid on top
+        const tileWidth = canvas.width / gridSize;
+        const tileHeight = tileWidth; // Enforce square tiles for a cubical look
+
+        // Calculate how many rows are needed to fill the entire canvas height
+        const numRows = Math.ceil(canvas.height / tileHeight);
+
+        for (let y = 0; y < numRows; y++) { // Loop to fill the entire height
+            for (let x = 0; x < gridSize; x++) { // Loop to fill the width
+                const tx = x * tileWidth;
+                const ty = y * tileHeight;
+
+                // Create a radial gradient for the 3D highlight on each cube
+                // Animate the highlight position to create movement
+                const highlightX = tx + tileWidth * 0.25 + Math.sin(y * 0.4 + time * 0.0005) * tileWidth * 0.5;
+                const highlightY = ty + tileHeight * 0.25 + Math.cos(x * 0.4 + time * 0.0005) * tileHeight * 0.5;
+                
+                const radialGradient = ctx.createRadialGradient(
+                    highlightX, highlightY, 0, 
+                    highlightX, highlightY, tileWidth * 1.5
+                );
+                
+                // The gradient creates a transparent white "glare"
+                radialGradient.addColorStop(0, 'rgba(255, 255, 255, 0.4)');
+                radialGradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.2)');
+                radialGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+                ctx.fillStyle = radialGradient;
+                ctx.fillRect(tx, ty, tileWidth, tileHeight);
+
+                // Add a subtle border to enhance the grid effect
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.1)';
+                ctx.strokeRect(tx, ty, tileWidth, tileHeight);
+            }
+        }
+    }
+
+    // --- ANIMATION LOOP ---
+
+    function animate(timestamp) {
+        time = timestamp;
+        drawEffect();
+        requestAnimationFrame(animate);
+    }
+
+    // --- RESIZE AND INITIALIZATION ---
+
+    function resizeCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+    }
+
+    function init() {
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        requestAnimationFrame(animate);
+        updateShadow();
+    }
+
+    // --- EVENT HANDLERS ---
+    
+    function onColorChange() {
+        colorStart = colorPickerStart.value;
+        colorMid = colorPickerMid.value;
+        colorEnd = colorPickerEnd.value;
+    }
+
+    colorPickerStart.addEventListener('input', onColorChange);
+    colorPickerMid.addEventListener('input', onColorChange);
+    colorPickerEnd.addEventListener('input', onColorChange);
+
+    // Update grid size from slider
+    gridSizeSlider.addEventListener('input', (e) => {
+        gridSize = parseInt(e.target.value);
+    });
+
+    // Upload and display image
+    imageUpload.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file && file.type === "image/png") {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                foregroundImage.src = event.target.result;
+                imageControlsWrapper.style.display = 'block';
+                imageToggle.checked = true;
+                updateImageVisibility();
+            };
+            reader.readAsDataURL(file);
+        } else if (file) {
+            alert("Please upload a valid PNG file.");
+        }
+    });
+
+    // Update opacity
+    opacitySlider.addEventListener('input', (e) => {
+        foregroundImage.style.opacity = e.target.value;
+    });
+
+    // Toggle image visibility
+    function updateImageVisibility() {
+        if (imageToggle.checked && foregroundImage.src) {
+            foregroundImage.style.display = 'block';
+        } else {
+            foregroundImage.style.display = 'none';
+        }
+    }
+    imageToggle.addEventListener('change', updateImageVisibility);
+    
+    // Update shadow
+    function updateShadow() {
+        if (shadowToggle.checked && foregroundImage.src && imageToggle.checked) {
+            foregroundImage.classList.add('has-shadow');
+        } else {
+            foregroundImage.classList.remove('has-shadow');
+        }
+    }
+    shadowToggle.addEventListener('change', updateShadow);
+    imageToggle.addEventListener('change', updateShadow);
+    foregroundImage.addEventListener('load', updateShadow);
+
+    // Event handler for the remove image button
+    removeImageBtn.addEventListener('click', () => {
+        foregroundImage.src = '';
+        imageControlsWrapper.style.display = 'none';
+        imageToggle.checked = false;
+        updateImageVisibility();
+        imageUpload.value = null;
+        updateShadow();
+    });
+
+    // Toggle controls visibility
+    function toggleControls() {
+        controlsPanel.classList.toggle('translate-x-[120%]');
+        controlsPanel.classList.toggle('opacity-0');
+    }
+    hideControlsBtn.addEventListener('click', toggleControls);
+
+    // Gesture to hide/show controls (two-finger tap)
+    let touchStartTime = 0;
+    mainContainer.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) {
+             touchStartTime = new Date().getTime();
+        }
+    }, { passive: true });
+
+    mainContainer.addEventListener('touchend', (e) => {
+        if (e.changedTouches.length === 2) {
+            const tapDuration = new Date().getTime() - touchStartTime;
+            if (tapDuration > 0 && tapDuration < 200) { // A quick tap
+                toggleControls();
+            }
+        }
+    }, { passive: true });
+
+    // --- START THE APPLICATION ---
+    init();
+
+</script>
+</body>
+</html>
+
+
