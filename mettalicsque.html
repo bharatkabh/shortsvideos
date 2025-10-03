@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>9:16 Metallic Effect Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: none; /* Prevents default touch behaviors like scrolling/zooming on the body */
+        }
+        /* Style for the foreground image shadow */
+        .has-shadow {
+            filter: drop-shadow(0px 10px 15px rgba(0,0,0,0.4));
+        }
+        /* Custom scrollbar for better aesthetics */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #2d3748;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4a5568;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #718096;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 flex items-center justify-center h-screen overflow-hidden">
+
+    <!-- Main container to enforce the 9:16 aspect ratio -->
+    <div class="relative w-full max-w-[calc(100vh*9/16)] h-full max-h-screen shadow-2xl bg-black" id="main-container">
+        <canvas id="metallic-canvas" class="w-full h-full"></canvas>
+        <!-- Foreground image container -->
+        <div id="foreground-container" class="absolute inset-0 flex items-center justify-center p-8 pointer-events-none">
+            <img id="foreground-image" src="" alt="Foreground PNG" class="max-w-full max-h-full object-contain transition-all duration-300">
+        </div>
+    </div>
+
+    <!-- Floating Controls Panel -->
+    <div id="controls-panel" class="absolute top-4 right-4 bg-gray-800 bg-opacity-80 backdrop-blur-md text-white p-6 rounded-2xl shadow-lg w-96 max-w-[90vw] max-h-[90vh] overflow-y-auto transition-transform duration-300">
+        <h2 class="text-2xl font-bold mb-6 border-b border-gray-600 pb-3">Controls</h2>
+        
+        <!-- Background Effect Controls -->
+        <div class="space-y-5 mb-6">
+            <h3 class="text-lg font-semibold text-cyan-300">Background Effect</h3>
+            <div>
+                <label for="color-picker" class="block mb-2 font-medium">Base Color</label>
+                <div class="relative">
+                    <input type="color" id="color-picker" value="#16a34a" class="w-full h-12 p-1 bg-gray-700 rounded-lg cursor-pointer border-2 border-transparent">
+                </div>
+            </div>
+        </div>
+        
+        <!-- Foreground Image Controls -->
+        <div class="space-y-5 border-t border-gray-600 pt-6">
+            <h3 class="text-lg font-semibold text-cyan-300">Foreground Image</h3>
+            <div>
+                <label for="image-upload" class="block mb-2 font-medium">Upload PNG Image</label>
+                <input type="file" id="image-upload" accept="image/png" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-cyan-500 file:text-white hover:file:bg-cyan-600 cursor-pointer">
+            </div>
+            <div>
+                <label for="opacity-slider" class="block mb-2 font-medium">Opacity</label>
+                <input type="range" id="opacity-slider" min="0" max="1" step="0.01" value="1" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+            </div>
+            <div class="flex items-center">
+                <input type="checkbox" id="shadow-toggle" class="w-5 h-5 text-cyan-500 bg-gray-700 border-gray-600 rounded focus:ring-cyan-600 ring-offset-gray-800 focus:ring-2 cursor-pointer" checked>
+                <label for="shadow-toggle" class="ml-3 font-medium cursor-pointer">Enable Shadow</label>
+            </div>
+        </div>
+
+        <!-- Hide Controls Button -->
+         <div class="mt-8 border-t border-gray-600 pt-4">
+            <button id="hide-controls-btn" class="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                Hide Controls
+            </button>
+            <p class="text-xs text-gray-500 text-center mt-2">You can also two-finger tap to toggle controls.</p>
+        </div>
+    </div>
+
+<script>
+    // DOM Element References
+    const canvas = document.getElementById('metallic-canvas');
+    const ctx = canvas.getContext('2d');
+    const colorPicker = document.getElementById('color-picker');
+    const imageUpload = document.getElementById('image-upload');
+    const foregroundImage = document.getElementById('foreground-image');
+    const opacitySlider = document.getElementById('opacity-slider');
+    const shadowToggle = document.getElementById('shadow-toggle');
+    const controlsPanel = document.getElementById('controls-panel');
+    const hideControlsBtn = document.getElementById('hide-controls-btn');
+    const mainContainer = document.getElementById('main-container');
+
+    // State variables
+    let baseColor = colorPicker.value;
+    let time = 0;
+    const gridSize = 20;
+
+    // --- UTILITY FUNCTIONS ---
+    
+    // Function to parse hex color to RGB
+    function hexToRgb(hex) {
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        return { r, g, b };
+    }
+
+    // Function to adjust the brightness of an RGB color
+    function adjustBrightness(rgb, factor) {
+        const r = Math.max(0, Math.min(255, rgb.r * factor));
+        const g = Math.max(0, Math.min(255, rgb.g * factor));
+        const b = Math.max(0, Math.min(255, rgb.b * factor));
+        return `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
+    }
+
+    // --- CORE DRAWING LOGIC ---
+
+    function drawEffect() {
+        // Clear the canvas
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const tileWidth = canvas.width / gridSize;
+        const tileHeight = canvas.height / gridSize;
+        
+        const baseRgb = hexToRgb(baseColor);
+        // Define more distinct colors for the different facets
+        const highlightColor = adjustBrightness(baseRgb, 1.9); // Brightest point
+        const lightFaceColor = adjustBrightness(baseRgb, 1.3);   // Bright facet
+        const darkFaceColor = adjustBrightness(baseRgb, 0.7);    // Dark facet
+        const shadowColor = adjustBrightness(baseRgb, 0.2);     // Deepest shadow
+
+        for (let y = 0; y < gridSize; y++) {
+            for (let x = 0; x < gridSize; x++) {
+                const tx = x * tileWidth;
+                const ty = y * tileHeight;
+                
+                // The center point of the tile, which moves to create the shimmer effect
+                const centerX = tx + tileWidth / 2 + Math.sin(x * 0.4 + time * 0.0025) * tileWidth * 0.3;
+                const centerY = ty + tileHeight / 2 + Math.cos(y * 0.4 + time * 0.0025) * tileHeight * 0.3;
+
+                // Define the four corner points of the tile
+                const p1 = { x: tx, y: ty }; // Top-left
+                const p2 = { x: tx + tileWidth, y: ty }; // Top-right
+                const p3 = { x: tx + tileWidth, y: ty + tileHeight }; // Bottom-right
+                const p4 = { x: tx, y: ty + tileHeight }; // Bottom-left
+                const center = { x: centerX, y: centerY };
+
+                // --- Draw 4 triangles (facets) with linear gradients to simulate a 3D surface ---
+
+                // Top facet (brighter)
+                let gradientTop = ctx.createLinearGradient(p1.x, p1.y, center.x, center.y);
+                gradientTop.addColorStop(0, lightFaceColor);
+                gradientTop.addColorStop(1, highlightColor);
+                ctx.fillStyle = gradientTop;
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.lineTo(center.x, center.y);
+                ctx.fill();
+
+                // Right facet (darker)
+                let gradientRight = ctx.createLinearGradient(p2.x, p2.y, center.x, center.y);
+                gradientRight.addColorStop(0, darkFaceColor);
+                gradientRight.addColorStop(1, shadowColor);
+                ctx.fillStyle = gradientRight;
+                ctx.beginPath();
+                ctx.moveTo(p2.x, p2.y);
+                ctx.lineTo(p3.x, p3.y);
+                ctx.lineTo(center.x, center.y);
+                ctx.fill();
+
+                // Bottom facet (darkest)
+                let gradientBottom = ctx.createLinearGradient(p3.x, p3.y, center.x, center.y);
+                gradientBottom.addColorStop(0, shadowColor);
+                gradientBottom.addColorStop(1, darkFaceColor);
+                ctx.fillStyle = gradientBottom;
+                ctx.beginPath();
+                ctx.moveTo(p3.x, p3.y);
+                ctx.lineTo(p4.x, p4.y);
+                ctx.lineTo(center.x, center.y);
+                ctx.fill();
+
+                // Left facet (bright)
+                let gradientLeft = ctx.createLinearGradient(p4.x, p4.y, center.x, center.y);
+                gradientLeft.addColorStop(0, highlightColor);
+                gradientLeft.addColorStop(1, lightFaceColor);
+                ctx.fillStyle = gradientLeft;
+                ctx.beginPath();
+                ctx.moveTo(p4.x, p4.y);
+                ctx.lineTo(p1.x, p1.y);
+                ctx.lineTo(center.x, center.y);
+                ctx.fill();
+            }
+        }
+    }
+
+    // --- ANIMATION LOOP ---
+
+    function animate(timestamp) {
+        time = timestamp;
+        drawEffect();
+        requestAnimationFrame(animate);
+    }
+    
+    // --- RESIZE AND INITIALIZATION ---
+
+    function resizeCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        // Get the actual size of the canvas element on the page
+        const rect = canvas.getBoundingClientRect();
+        // Set the internal drawing buffer size, scaled by device pixel ratio for sharpness
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        // Scale the context to match
+        ctx.scale(dpr, dpr);
+    }
+
+    function init() {
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        // Start the animation
+        requestAnimationFrame(animate);
+        // Initial shadow state
+        updateShadow();
+    }
+
+    // --- EVENT HANDLERS ---
+    
+    // Update color
+    colorPicker.addEventListener('input', (e) => {
+        baseColor = e.target.value;
+    });
+
+    // Upload and display image
+    imageUpload.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file && file.type === "image/png") {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                foregroundImage.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        } else if (file) {
+            alert("Please upload a valid PNG file.");
+        }
+    });
+
+    // Update opacity
+    opacitySlider.addEventListener('input', (e) => {
+        foregroundImage.style.opacity = e.target.value;
+    });
+    
+    // Update shadow
+    function updateShadow() {
+        if (shadowToggle.checked && foregroundImage.src) {
+            foregroundImage.classList.add('has-shadow');
+        } else {
+            foregroundImage.classList.remove('has-shadow');
+        }
+    }
+    shadowToggle.addEventListener('change', updateShadow);
+    foregroundImage.addEventListener('load', updateShadow); // Apply shadow when a new image is loaded
+
+    // Toggle controls visibility
+    function toggleControls() {
+        controlsPanel.classList.toggle('translate-x-[120%]');
+        controlsPanel.classList.toggle('opacity-0');
+    }
+    hideControlsBtn.addEventListener('click', toggleControls);
+
+    // Gesture to hide/show controls (two-finger tap)
+    let touchStartTime = 0;
+    mainContainer.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) {
+             touchStartTime = new Date().getTime();
+        }
+    }, { passive: true });
+
+    mainContainer.addEventListener('touchend', (e) => {
+        if (e.changedTouches.length === 2) {
+            const tapDuration = new Date().getTime() - touchStartTime;
+            if (tapDuration > 0 && tapDuration < 200) { // A quick tap
+                toggleControls();
+            }
+        }
+    }, { passive: true });
+
+
+    // --- START THE APPLICATION ---
+    init();
+
+</script>
+</body>
+</html>
+
+
