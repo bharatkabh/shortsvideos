@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Smart Box Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: none;
+            overscroll-behavior: none;
+        }
+        /* Hide the default color input UI */
+        .color-input {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            pointer-events: none;
+        }
+        /* Custom styles for the stroke width slider */
+        #stroke-width-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 24px;
+            height: 24px;
+            background: #22d3ee;
+            cursor: pointer;
+            border-radius: 50%;
+            border: 4px solid #1e293b;
+            margin-top: -10px; /* Center thumb on the track */
+        }
+        #stroke-width-slider::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: #22d3ee;
+            cursor: pointer;
+            border-radius: 50%;
+            border: 4px solid #1e293b;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 flex items-center justify-center h-screen overflow-hidden">
+
+    <div class="relative w-full max-w-[calc(100vh*9/16)] h-full max-h-screen shadow-2xl bg-slate-800" id="main-container">
+        <canvas id="editor-canvas" class="w-full h-full"></canvas>
+    </div>
+
+    <!-- Minimalist Floating Controls Panel -->
+    <div id="controls-panel" class="absolute bg-slate-900 bg-opacity-80 backdrop-blur-md text-white p-2 rounded-full shadow-lg flex items-center gap-2 transition-all duration-200 opacity-0 pointer-events-none">
+        <!-- Fill Color Control -->
+        <label for="fill-color-picker" id="fill-color-label" class="w-10 h-10 flex items-center justify-center rounded-full bg-slate-700 hover:bg-slate-600 cursor-pointer font-bold text-lg">F</label>
+        <input type="color" id="fill-color-picker" class="color-input">
+        
+        <!-- Stroke Width Control (button) -->
+        <div id="stroke-width-control" class="w-10 h-10 flex items-center justify-center rounded-full bg-slate-700 hover:bg-slate-600 cursor-pointer font-bold text-lg select-none">
+            <span id="stroke-width-value">4</span>
+        </div>
+
+        <!-- Delete Button -->
+        <button id="delete-btn" class="w-10 h-10 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-700 text-white transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+    </div>
+
+    <!-- Stroke Width Slider (contextual) -->
+    <input type="range" id="stroke-width-slider" min="0" max="50" step="1" class="absolute w-48 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer opacity-0 pointer-events-none transition-opacity duration-200">
+
+<script>
+    // --- SETUP ---
+    const canvas = document.getElementById('editor-canvas');
+    const ctx = canvas.getContext('2d');
+    const mainContainer = document.getElementById('main-container');
+
+    const controlsPanel = document.getElementById('controls-panel');
+    const fillColorPicker = document.getElementById('fill-color-picker');
+    const fillColorLabel = document.getElementById('fill-color-label');
+    const strokeWidthControl = document.getElementById('stroke-width-control');
+    const strokeWidthValue = document.getElementById('stroke-width-value');
+    const strokeWidthSlider = document.getElementById('stroke-width-slider');
+    const deleteBtn = document.getElementById('delete-btn');
+
+    let boxes = [];
+    let selectedBox = null;
+    let action = { type: null, handle: null, startX: 0, startY: 0, initialX: 0, initialY: 0 };
+    let lastTap = 0;
+    const snapThreshold = 10;
+
+    // --- COLOR HARMONY ENGINE ---
+    function hexToRgb(hex) {
+        let r = 0, g = 0, b = 0;
+        if (hex.length == 4) { r = "0x" + hex[1] + hex[1]; g = "0x" + hex[2] + hex[2]; b = "0x" + hex[3] + hex[3]; }
+        else if (hex.length == 7) { r = "0x" + hex[1] + hex[2]; g = "0x" + hex[3] + hex[4]; b = "0x" + hex[5] + hex[6]; }
+        return { r: +r, g: +g, b: +b };
+    }
+    function rgbToHex(r, g, b) { return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).padStart(6, '0'); }
+    function rgbToHsl(r, g, b) {
+        r /= 255; g /= 255; b /= 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        let h, s, l = (max + min) / 2;
+        if (max === min) { h = s = 0; }
+        else {
+            const d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            switch (max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+        }
+        return { h, s, l };
+    }
+    function hslToRgb(h, s, l) {
+        let r, g, b;
+        if (s === 0) { r = g = b = l; }
+        else {
+            const hue2rgb = (p, q, t) => {
+                if (t < 0) t += 1; if (t > 1) t -= 1;
+                if (t < 1 / 6) return p + (q - p) * 6 * t;
+                if (t < 1 / 2) return q;
+                if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+                return p;
+            };
+            const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            const p = 2 * l - q;
+            r = hue2rgb(p, q, h + 1 / 3); g = hue2rgb(p, q, h); b = hue2rgb(p, q, h - 1 / 3);
+        }
+        return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+    }
+    function getComplementaryColor(hex) {
+        const {r, g, b} = hexToRgb(hex);
+        const {h, s, l} = rgbToHsl(r, g, b);
+        const complementaryH = (h + 0.5) % 1;
+        const {r: rC, g: gC, b: bC} = hslToRgb(complementaryH, s, l);
+        return rgbToHex(rC, gC, bC);
+    }
+    function getHarmonizedColor(neighbors) {
+        if (neighbors.length === 0) return rgbToHex(Math.random()*128+127, Math.random()*128+127, Math.random()*128+127);
+        let avgR = 0, avgG = 0, avgB = 0;
+        neighbors.forEach(box => { const { r, g, b } = hexToRgb(box.fillColor); avgR += r; avgG += g; avgB += b; });
+        avgR /= neighbors.length; avgG /= neighbors.length; avgB /= neighbors.length;
+        const { h, s, l } = rgbToHsl(avgR, avgG, avgB);
+        const newH = (h + 0.27) % 1;
+        const { r, g, b } = hslToRgb(newH, Math.min(s + 0.1, 1), Math.max(l, 0.5));
+        return rgbToHex(r, g, b);
+    }
+    function getSmartStrokeColor(fillHex) {
+        const { r, g, b } = hexToRgb(fillHex);
+        const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+        return luminance > 0.5 ? '#1e293b' : '#cbd5e1';
+    }
+    function setBoxColors(box, fillColor) {
+        box.fillColor = fillColor;
+        box.strokeColor = getSmartStrokeColor(fillColor);
+    }
+
+    // --- UTILITY & GEOMETRY FUNCTIONS ---
+    function getTouchPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches ? e.touches[0] : e;
+        return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+    }
+    function isPointInBox(x, y, box) { return x > box.x && x < box.x + box.width && y > box.y && y < box.y + box.height; }
+    function getResizeHandle(x, y, box) {
+        const handleSize = 15;
+        const handles = {
+            'top-left': { x: box.x, y: box.y }, 'top-right': { x: box.x + box.width, y: box.y },
+            'bottom-left': { x: box.x, y: box.y + box.height }, 'bottom-right': { x: box.x + box.width, y: box.y + box.height }
+        };
+        for (const [name, pos] of Object.entries(handles)) { if (Math.abs(x - pos.x) < handleSize && Math.abs(y - pos.y) < handleSize) return name; }
+        return null;
+    }
+    function getVisualBounds(box) {
+        if (!box) return null;
+        const halfStroke = box.strokeWidth / 2;
+        return { x: box.x - halfStroke, y: box.y - halfStroke, width: box.width + box.strokeWidth, height: box.height + box.strokeWidth };
+    }
+    function isOverlapping(box1, box2) {
+        if (!box1 || !box2 || box1.id === box2.id) return false;
+        const bounds1 = getVisualBounds(box1); const bounds2 = getVisualBounds(box2);
+        return !(bounds1.x + bounds1.width <= bounds2.x || bounds1.x >= bounds2.x + bounds2.width || bounds1.y + bounds1.height <= bounds2.y || bounds1.y >= bounds2.y + bounds2.height);
+    }
+
+    // --- DRAWING LOGIC ---
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        boxes.forEach(box => {
+            ctx.fillStyle = box.fillColor; ctx.strokeStyle = box.strokeColor; ctx.lineWidth = box.strokeWidth;
+            ctx.fillRect(box.x, box.y, box.width, box.height);
+            if (box.strokeWidth > 0) ctx.strokeRect(box.x, box.y, box.width, box.height);
+        });
+        if (selectedBox) drawSelection(selectedBox);
+    }
+    function drawSelection(box) {
+        const offset = box.strokeWidth / 2 + 4;
+        ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 2; ctx.setLineDash([6, 3]);
+        ctx.strokeRect(box.x - offset, box.y - offset, box.width + offset * 2, box.height + offset * 2);
+        ctx.setLineDash([]); ctx.fillStyle = '#22d3ee';
+        const handleSize = 10;
+        const handles = {
+            'top-left': { x: box.x, y: box.y }, 'top-right': { x: box.x + box.width, y: box.y },
+            'bottom-left': { x: box.x, y: box.y + box.height }, 'bottom-right': { x: box.x + box.width, y: box.y + box.height }
+        };
+        for (const pos of Object.values(handles)) { ctx.fillRect(pos.x - handleSize / 2, pos.y - handleSize / 2, handleSize, handleSize); }
+    }
+
+    // --- BOX MANIPULATION ---
+    function createBox(x, y) {
+        let fillColor;
+        if (boxes.length === 0) { fillColor = rgbToHex(Math.floor(Math.random()*200 + 55), Math.floor(Math.random()*200 + 55), Math.floor(Math.random()*200 + 55)); }
+        else if (boxes.length === 1) { fillColor = getComplementaryColor(boxes[0].fillColor); }
+        else { const neighbors = findNeighbors({ x, y, width: 100, height: 100 }); fillColor = getHarmonizedColor(neighbors); }
+        const newBox = { id: Date.now(), x: x - 50, y: y - 50, width: 100, height: 100, strokeWidth: 4 };
+        setBoxColors(newBox, fillColor);
+        boxes.push(newBox);
+        return newBox;
+    }
+    function deleteSelectedBox() {
+        if (!selectedBox) return;
+        boxes = boxes.filter(b => b.id !== selectedBox.id);
+        setSelectedBox(null);
+    }
+    function setSelectedBox(box) {
+        selectedBox = box;
+        strokeWidthSlider.style.opacity = '0'; strokeWidthSlider.style.pointerEvents = 'none';
+        if (box) {
+            controlsPanel.style.opacity = '1'; controlsPanel.style.pointerEvents = 'auto';
+            const panelRect = controlsPanel.getBoundingClientRect(); const canvasRect = canvas.getBoundingClientRect();
+            let top = canvasRect.top + box.y - panelRect.height - 10;
+            let left = canvasRect.left + box.x + box.width / 2 - panelRect.width / 2;
+            if (top < canvasRect.top + 10) top = canvasRect.top + box.y + box.height + 10;
+            if (left < canvasRect.left) left = canvasRect.left;
+            if (left + panelRect.width > canvasRect.right) left = canvasRect.right - panelRect.width;
+            controlsPanel.style.top = `${top}px`; controlsPanel.style.left = `${left}px`;
+            fillColorPicker.value = box.fillColor; fillColorLabel.style.backgroundColor = box.fillColor;
+            strokeWidthValue.textContent = box.strokeWidth; strokeWidthSlider.value = box.strokeWidth;
+        } else {
+            controlsPanel.style.opacity = '0'; controlsPanel.style.pointerEvents = 'none';
+        }
+    }
+    function findNeighbors(box, checkRadius = 300) {
+        const centerX = box.x + box.width / 2; const centerY = box.y + box.height / 2;
+        return boxes.filter(b => b.id !== box.id).filter(b => {
+            const otherCenterX = b.x + b.width / 2; const otherCenterY = b.y + b.height / 2;
+            const dist = Math.sqrt(Math.pow(centerX - otherCenterX, 2) + Math.pow(centerY - otherCenterY, 2));
+            return dist < checkRadius;
+        });
+    }
+
+    // --- SNAPPING LOGIC ---
+    function performSnapping(movingBox) {
+        let snapX = null, snapY = null;
+        const otherBoxes = boxes.filter(b => b.id !== movingBox.id);
+        if (otherBoxes.length === 0) return;
+        const movingBounds = getVisualBounds(movingBox);
+        const otherBounds = otherBoxes.map(b => getVisualBounds(b));
+        const boxEdgesX = [{ pos: movingBounds.x, edge: 'left' }, { pos: movingBounds.x + movingBounds.width, edge: 'right' }];
+        const otherEdgesX = otherBounds.flatMap(b => [{ pos: b.x }, { pos: b.x + b.width }]);
+        for (const edge of boxEdgesX) { for (const otherEdge of otherEdgesX) { if (Math.abs(edge.pos - otherEdge.pos) < snapThreshold) { snapX = edge.edge === 'left' ? otherEdge.pos : otherEdge.pos - movingBounds.width; break; } } if (snapX !== null) break; }
+        if (snapX !== null) movingBox.x = snapX + (movingBox.strokeWidth / 2);
+        const boxEdgesY = [{ pos: movingBounds.y, edge: 'top' }, { pos: movingBounds.y + movingBounds.height, edge: 'bottom' }];
+        const otherEdgesY = otherBounds.flatMap(b => [{ pos: b.y }, { pos: b.y + b.height }]);
+        for (const edge of boxEdgesY) { for (const otherEdge of otherEdgesY) { if (Math.abs(edge.pos - otherEdge.pos) < snapThreshold) { snapY = edge.edge === 'top' ? otherEdge.pos : otherEdge.pos - movingBounds.height; break; } } if (snapY !== null) break; }
+        if (snapY !== null) movingBox.y = snapY + (movingBox.strokeWidth / 2);
+    }
+
+    // --- EVENT HANDLERS ---
+    function handleStart(e) {
+        const target = e.target;
+        if (controlsPanel.contains(target) || strokeWidthSlider.contains(target)) return;
+        e.preventDefault();
+        const pos = getTouchPos(e);
+        action.startX = pos.x;
+        action.startY = pos.y;
+        action.initialX = pos.x; // FIX: Store initial position for tap detection
+        action.initialY = pos.y; // FIX: Store initial position for tap detection
+        let boxToSelect = null, handle = null;
+        if (selectedBox) handle = getResizeHandle(pos.x, pos.y, selectedBox);
+        if (handle) {
+            action.type = 'resize';
+            action.handle = handle;
+        } else {
+            boxToSelect = boxes.slice().reverse().find(box => isPointInBox(pos.x, pos.y, box));
+            setSelectedBox(boxToSelect);
+            if (boxToSelect) { action.type = 'drag'; }
+            else { action.type = 'select'; }
+        }
+    }
+    function handleMove(e) {
+        if (!action.type) return;
+        e.preventDefault();
+        const pos = getTouchPos(e);
+        const dx = pos.x - action.startX;
+        const dy = pos.y - action.startY;
+        if (!selectedBox) return;
+        const lastValidState = { x: selectedBox.x, y: selectedBox.y, width: selectedBox.width, height: selectedBox.height };
+        if (action.type === 'drag') {
+            selectedBox.x += dx;
+            selectedBox.y += dy;
+            performSnapping(selectedBox);
+            const neighbors = findNeighbors(selectedBox);
+            if (neighbors.length > 0) {
+                const targetColor = getHarmonizedColor(neighbors);
+                const currentColorRgb = hexToRgb(selectedBox.fillColor);
+                const targetColorRgb = hexToRgb(targetColor);
+                const lerp = (a, b, t) => a + (b - a) * t;
+                const newR = lerp(currentColorRgb.r, targetColorRgb.r, 0.05);
+                const newG = lerp(currentColorRgb.g, targetColorRgb.g, 0.05);
+                const newB = lerp(currentColorRgb.b, targetColorRgb.b, 0.05);
+                setBoxColors(selectedBox, rgbToHex(Math.round(newR), Math.round(newG), Math.round(newB)));
+                fillColorPicker.value = selectedBox.fillColor;
+            }
+            const panelRect = controlsPanel.getBoundingClientRect();
+            const canvasRect = canvas.getBoundingClientRect();
+            let top = canvasRect.top + selectedBox.y - panelRect.height - 10;
+            if (top < canvasRect.top + 10) top = canvasRect.top + selectedBox.y + selectedBox.height + 10;
+            controlsPanel.style.top = `${top}px`;
+            controlsPanel.style.left = `${controlsPanel.getBoundingClientRect().left + dx}px`;
+        } else if (action.type === 'resize') {
+            if (action.handle.includes('left')) { selectedBox.x += dx; selectedBox.width -= dx; }
+            if (action.handle.includes('right')) { selectedBox.width += dx; }
+            if (action.handle.includes('top')) { selectedBox.y += dy; selectedBox.height -= dy; }
+            if (action.handle.includes('bottom')) { selectedBox.height += dy; }
+            if (selectedBox.width < 20) { selectedBox.width = 20; if(action.handle.includes('left')) selectedBox.x = lastValidState.x + lastValidState.width - 20; }
+            if (selectedBox.height < 20) { selectedBox.height = 20; if(action.handle.includes('top')) selectedBox.y = lastValidState.y + lastValidState.height - 20; }
+        }
+        let collision = false;
+        for (const otherBox of boxes) {
+            if (isOverlapping(selectedBox, otherBox)) { collision = true; break; }
+        }
+        if (collision) {
+            selectedBox.x = lastValidState.x;
+            selectedBox.y = lastValidState.y;
+            selectedBox.width = lastValidState.width;
+            selectedBox.height = lastValidState.height;
+        } else {
+            action.startX = pos.x;
+            action.startY = pos.y;
+        }
+    }
+    function handleEnd(e) {
+        const pos = getTouchPos(e.changedTouches ? e.changedTouches[0] : e);
+        // FIX: Use initial coordinates to detect a tap, not the last move coordinates
+        const dx = pos.x - action.initialX;
+        const dy = pos.y - action.initialY;
+        if (action.type === 'select' && Math.abs(dx) < 5 && Math.abs(dy) < 5) {
+             const currentTime = new Date().getTime();
+             if (currentTime - lastTap > 200) {
+                const newBox = createBox(pos.x, pos.y);
+                setSelectedBox(newBox);
+             }
+             lastTap = currentTime;
+        }
+        action.type = null;
+    }
+    function setupEventListeners() {
+        canvas.addEventListener('touchstart', handleStart, { passive: false });
+        canvas.addEventListener('touchmove', handleMove, { passive: false });
+        canvas.addEventListener('touchend', handleEnd);
+        canvas.addEventListener('mousedown', handleStart);
+        canvas.addEventListener('mousemove', handleMove);
+        canvas.addEventListener('mouseup', handleEnd);
+        fillColorLabel.addEventListener('click', () => fillColorPicker.click());
+        fillColorPicker.addEventListener('input', (e) => { 
+            if (selectedBox) {
+                setBoxColors(selectedBox, e.target.value);
+                fillColorLabel.style.backgroundColor = e.target.value;
+            }
+        });
+        strokeWidthControl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!selectedBox) return;
+            const isSliderVisible = strokeWidthSlider.style.opacity === '1';
+            if (isSliderVisible) {
+                strokeWidthSlider.style.opacity = '0';
+                strokeWidthSlider.style.pointerEvents = 'none';
+            } else {
+                const panelRect = controlsPanel.getBoundingClientRect();
+                strokeWidthSlider.style.top = `${panelRect.bottom + 10}px`;
+                strokeWidthSlider.style.left = `${panelRect.left + (panelRect.width / 2) - (strokeWidthSlider.offsetWidth / 2)}px`;
+                strokeWidthSlider.style.opacity = '1';
+                strokeWidthSlider.style.pointerEvents = 'auto';
+            }
+        });
+        strokeWidthSlider.addEventListener('input', (e) => {
+            if (!selectedBox) return;
+            const oldValue = selectedBox.strokeWidth;
+            const newValue = parseInt(e.target.value);
+            selectedBox.strokeWidth = newValue;
+            strokeWidthValue.textContent = newValue;
+            let collision = false;
+            for (const otherBox of boxes) {
+                if (isOverlapping(selectedBox, otherBox)) { collision = true; break; }
+            }
+            if (collision) {
+                selectedBox.strokeWidth = oldValue;
+                strokeWidthSlider.value = oldValue;
+                strokeWidthValue.textContent = oldValue;
+            }
+        });
+        deleteBtn.addEventListener('click', deleteSelectedBox);
+    }
+    
+    // --- INITIALIZATION ---
+    function resizeCanvas() {
+        const rect = mainContainer.getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+    }
+    function init() {
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        setupEventListeners();
+        function animate() {
+            draw();
+            requestAnimationFrame(animate);
+        }
+        animate();
+    }
+    init();
+</script>
+</body>
+</html>
+

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Smart Box Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: none;
+            overscroll-behavior: none;
+        }
+        /* Hide the default color input UI */
+        .color-input {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            pointer-events: none;
+        }
+        .controls-active {
+            cursor: ns-resize;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 flex items-center justify-center h-screen overflow-hidden">
+
+    <div class="relative w-full max-w-[calc(100vh*9/16)] h-full max-h-screen shadow-2xl bg-slate-800" id="main-container">
+        <canvas id="editor-canvas" class="w-full h-full"></canvas>
+    </div>
+
+    <!-- NEW Minimalist Floating Controls Panel -->
+    <div id="controls-panel" class="absolute bg-slate-900 bg-opacity-80 backdrop-blur-md text-white p-2 rounded-full shadow-lg flex items-center gap-2 transition-all duration-200 opacity-0 pointer-events-none">
+        <!-- Fill Color Control -->
+        <label for="fill-color-picker" class="w-10 h-10 flex items-center justify-center rounded-full bg-slate-700 hover:bg-slate-600 cursor-pointer font-bold text-lg">F</label>
+        <input type="color" id="fill-color-picker" class="color-input">
+        
+        <!-- Stroke Color Control -->
+        <label for="stroke-color-picker" class="w-10 h-10 flex items-center justify-center rounded-full bg-slate-700 hover:bg-slate-600 cursor-pointer font-bold text-lg">S</label>
+        <input type="color" id="stroke-color-picker" class="color-input">
+
+        <!-- Stroke Width Control -->
+        <div id="stroke-width-control" class="w-10 h-10 flex items-center justify-center rounded-full bg-slate-700 hover:bg-slate-600 cursor-ns-resize font-bold text-lg select-none">
+            <span id="stroke-width-value">4</span>
+        </div>
+
+        <!-- Delete Button -->
+        <button id="delete-btn" class="w-10 h-10 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-700 text-white transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+    </div>
+
+<script>
+    // --- SETUP ---
+    const canvas = document.getElementById('editor-canvas');
+    const ctx = canvas.getContext('2d');
+    const mainContainer = document.getElementById('main-container');
+
+    const controlsPanel = document.getElementById('controls-panel');
+    const fillColorPicker = document.getElementById('fill-color-picker');
+    const strokeColorPicker = document.getElementById('stroke-color-picker');
+    const strokeWidthControl = document.getElementById('stroke-width-control');
+    const strokeWidthValue = document.getElementById('stroke-width-value');
+    const deleteBtn = document.getElementById('delete-btn');
+
+    let boxes = [];
+    let selectedBox = null;
+    let action = { type: null, handle: null, startX: 0, startY: 0, originalValue: 0 };
+    let lastTap = 0;
+    const snapThreshold = 10;
+
+    // --- UTILITY & GEOMETRY FUNCTIONS ---
+    function getTouchPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches ? e.touches[0] : e;
+        return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+    }
+    function isPointInBox(x, y, box) {
+        return x > box.x && x < box.x + box.width && y > box.y && y < box.y + box.height;
+    }
+    function getResizeHandle(x, y, box) {
+        const handleSize = 15;
+        const handles = {
+            'top-left': { x: box.x, y: box.y },
+            'top-right': { x: box.x + box.width, y: box.y },
+            'bottom-left': { x: box.x, y: box.y + box.height },
+            'bottom-right': { x: box.x + box.width, y: box.y + box.height }
+        };
+        for (const [name, pos] of Object.entries(handles)) {
+            if (Math.abs(x - pos.x) < handleSize && Math.abs(y - pos.y) < handleSize) return name;
+        }
+        return null;
+    }
+    function getVisualBounds(box) {
+        if (!box) return null;
+        const halfStroke = box.strokeWidth / 2;
+        return { x: box.x - halfStroke, y: box.y - halfStroke, width: box.width + box.strokeWidth, height: box.height + box.strokeWidth };
+    }
+    function isOverlapping(box1, box2) {
+        if (!box1 || !box2 || box1.id === box2.id) return false;
+        const bounds1 = getVisualBounds(box1);
+        const bounds2 = getVisualBounds(box2);
+        return !(bounds1.x + bounds1.width <= bounds2.x || bounds1.x >= bounds2.x + bounds2.width || bounds1.y + bounds1.height <= bounds2.y || bounds1.y >= bounds2.y + bounds2.height);
+    }
+
+    // --- DRAWING LOGIC ---
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        boxes.forEach(box => {
+            ctx.fillStyle = box.fillColor;
+            ctx.strokeStyle = box.strokeColor;
+            ctx.lineWidth = box.strokeWidth;
+            ctx.fillRect(box.x, box.y, box.width, box.height);
+            if (box.strokeWidth > 0) ctx.strokeRect(box.x, box.y, box.width, box.height);
+        });
+        if (selectedBox) drawSelection(selectedBox);
+    }
+    function drawSelection(box) {
+        const offset = box.strokeWidth / 2 + 4;
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 3]);
+        ctx.strokeRect(box.x - offset, box.y - offset, box.width + offset * 2, box.height + offset * 2);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#22d3ee';
+        const handleSize = 10;
+        const handles = {
+            'top-left': { x: box.x, y: box.y },
+            'top-right': { x: box.x + box.width, y: box.y },
+            'bottom-left': { x: box.x, y: box.y + box.height },
+            'bottom-right': { x: box.x + box.width, y: box.y + box.height }
+        };
+        for (const pos of Object.values(handles)) {
+            ctx.fillRect(pos.x - handleSize / 2, pos.y - handleSize / 2, handleSize, handleSize);
+        }
+    }
+
+    // --- BOX MANIPULATION ---
+    function createBox(x, y) {
+        const newBox = { id: Date.now(), x: x - 50, y: y - 50, width: 100, height: 100, fillColor: '#334155', strokeColor: '#22d3ee', strokeWidth: 4 };
+        boxes.push(newBox);
+        return newBox;
+    }
+    function deleteSelectedBox() {
+        if (!selectedBox) return;
+        boxes = boxes.filter(b => b.id !== selectedBox.id);
+        setSelectedBox(null);
+    }
+    function setSelectedBox(box) {
+        selectedBox = box;
+        if (box) {
+            controlsPanel.style.opacity = '1';
+            controlsPanel.style.pointerEvents = 'auto';
+            
+            // Position the controls panel above the selected box
+            const panelRect = controlsPanel.getBoundingClientRect();
+            const canvasRect = canvas.getBoundingClientRect();
+            let top = canvasRect.top + box.y - panelRect.height - 10;
+            let left = canvasRect.left + box.x + box.width / 2 - panelRect.width / 2;
+
+            // Keep panel within canvas bounds
+            if (top < canvasRect.top + 10) top = canvasRect.top + box.y + box.height + 10;
+            if (left < canvasRect.left) left = canvasRect.left;
+            if (left + panelRect.width > canvasRect.right) left = canvasRect.right - panelRect.width;
+
+            controlsPanel.style.top = `${top}px`;
+            controlsPanel.style.left = `${left}px`;
+
+            fillColorPicker.value = box.fillColor;
+            strokeColorPicker.value = box.strokeColor;
+            strokeWidthValue.textContent = box.strokeWidth;
+        } else {
+            controlsPanel.style.opacity = '0';
+            controlsPanel.style.pointerEvents = 'none';
+        }
+    }
+
+    // --- SNAPPING LOGIC ---
+    function performSnapping(movingBox) {
+        let snapX = null, snapY = null;
+        const otherBoxes = boxes.filter(b => b.id !== movingBox.id);
+        if (otherBoxes.length === 0) return;
+        const movingBounds = getVisualBounds(movingBox);
+        const otherBounds = otherBoxes.map(b => getVisualBounds(b));
+        const boxEdgesX = [{ pos: movingBounds.x, edge: 'left' }, { pos: movingBounds.x + movingBounds.width, edge: 'right' }];
+        const otherEdgesX = otherBounds.flatMap(b => [{ pos: b.x }, { pos: b.x + b.width }]);
+        for (const edge of boxEdgesX) { for (const otherEdge of otherEdgesX) { if (Math.abs(edge.pos - otherEdge.pos) < snapThreshold) { snapX = edge.edge === 'left' ? otherEdge.pos : otherEdge.pos - movingBounds.width; break; } } if (snapX !== null) break; }
+        if (snapX !== null) movingBox.x = snapX + (movingBox.strokeWidth / 2);
+        const boxEdgesY = [{ pos: movingBounds.y, edge: 'top' }, { pos: movingBounds.y + movingBounds.height, edge: 'bottom' }];
+        const otherEdgesY = otherBounds.flatMap(b => [{ pos: b.y }, { pos: b.y + b.height }]);
+        for (const edge of boxEdgesY) { for (const otherEdge of otherEdgesY) { if (Math.abs(edge.pos - otherEdge.pos) < snapThreshold) { snapY = edge.edge === 'top' ? otherEdge.pos : otherEdge.pos - movingBounds.height; break; } } if (snapY !== null) break; }
+        if (snapY !== null) movingBox.y = snapY + (movingBox.strokeWidth / 2);
+    }
+
+    // --- EVENT HANDLERS ---
+    function handleStart(e) {
+        e.preventDefault();
+        const pos = getTouchPos(e);
+        action.startX = pos.x;
+        action.startY = pos.y;
+        
+        let boxToSelect = null, handle = null;
+        if (selectedBox) handle = getResizeHandle(pos.x, pos.y, selectedBox);
+
+        if (handle) {
+            action.type = 'resize';
+            action.handle = handle;
+        } else {
+            boxToSelect = boxes.slice().reverse().find(box => isPointInBox(pos.x, pos.y, box));
+            if (boxToSelect) {
+                action.type = 'drag';
+                setSelectedBox(boxToSelect);
+            } else {
+                setSelectedBox(null);
+                action.type = 'select';
+            }
+        }
+    }
+
+    function handleMove(e) {
+        if (!action.type) return;
+        e.preventDefault();
+        
+        const pos = getTouchPos(e);
+        const dx = pos.x - action.startX;
+        const dy = pos.y - action.startY;
+        
+        if (!selectedBox && action.type !== 'dragStroke') return;
+
+        const lastValidState = { x: selectedBox?.x, y: selectedBox?.y, width: selectedBox?.width, height: selectedBox?.height, strokeWidth: selectedBox?.strokeWidth };
+        
+        if (action.type === 'drag') {
+            selectedBox.x += dx;
+            selectedBox.y += dy;
+            performSnapping(selectedBox);
+        } else if (action.type === 'resize') {
+            if (action.handle.includes('left')) { selectedBox.x += dx; selectedBox.width -= dx; }
+            if (action.handle.includes('right')) { selectedBox.width += dx; }
+            if (action.handle.includes('top')) { selectedBox.y += dy; selectedBox.height -= dy; }
+            if (action.handle.includes('bottom')) { selectedBox.height += dy; }
+            if (selectedBox.width < 20) { selectedBox.width = 20; if(action.handle.includes('left')) selectedBox.x = lastValidState.x + lastValidState.width - 20; }
+            if (selectedBox.height < 20) { selectedBox.height = 20; if(action.handle.includes('top')) selectedBox.y = lastValidState.y + lastValidState.height - 20; }
+        } else if (action.type === 'dragStroke') {
+            const change = Math.round(-dy / 5); // Drag up to decrease, down to increase
+            let newValue = action.originalValue + change;
+            if (newValue < 0) newValue = 0;
+            if (newValue > 50) newValue = 50; // Max stroke
+            selectedBox.strokeWidth = newValue;
+            strokeWidthValue.textContent = newValue;
+        }
+
+        let collision = false;
+        if (selectedBox) {
+            for (const otherBox of boxes) {
+                if (isOverlapping(selectedBox, otherBox)) {
+                    collision = true;
+                    break;
+                }
+            }
+        }
+
+        if (collision) {
+            selectedBox.x = lastValidState.x;
+            selectedBox.y = lastValidState.y;
+            selectedBox.width = lastValidState.width;
+            selectedBox.height = lastValidState.height;
+            if (action.type === 'dragStroke') {
+                selectedBox.strokeWidth = lastValidState.strokeWidth;
+                strokeWidthValue.textContent = lastValidState.strokeWidth;
+            }
+        } else {
+            action.startX = pos.x;
+            action.startY = pos.y;
+        }
+    }
+
+    function handleEnd(e) {
+        if (action.type === 'dragStroke') {
+            document.body.classList.remove('controls-active');
+        }
+
+        const pos = getTouchPos(e.changedTouches ? e.changedTouches[0] : e);
+        const dx = pos.x - action.startX;
+        const dy = pos.y - action.startY;
+        
+        if (action.type === 'select' && Math.abs(dx) < 5 && Math.abs(dy) < 5) {
+             const currentTime = new Date().getTime();
+             if (currentTime - lastTap > 200) {
+                const newBox = createBox(pos.x, pos.y);
+                setSelectedBox(newBox);
+             }
+             lastTap = currentTime;
+        }
+        action.type = null;
+    }
+
+    function setupEventListeners() {
+        canvas.addEventListener('touchstart', handleStart, { passive: false });
+        canvas.addEventListener('touchend', handleEnd);
+        canvas.addEventListener('mousedown', handleStart);
+        canvas.addEventListener('mouseup', handleEnd);
+        
+        // Use window for move events to allow dragging outside canvas
+        window.addEventListener('touchmove', handleMove, { passive: false });
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('touchend', handleEnd);
+        window.addEventListener('mouseup', handleEnd);
+
+
+        document.querySelector('label[for="fill-color-picker"]').addEventListener('click', () => fillColorPicker.click());
+        document.querySelector('label[for="stroke-color-picker"]').addEventListener('click', () => strokeColorPicker.click());
+        
+        fillColorPicker.addEventListener('input', (e) => { if (selectedBox) selectedBox.fillColor = e.target.value; });
+        strokeColorPicker.addEventListener('input', (e) => { if (selectedBox) selectedBox.strokeColor = e.target.value; });
+        
+        strokeWidthControl.addEventListener('mousedown', (e) => {
+            if (!selectedBox) return;
+            action.type = 'dragStroke';
+            action.startY = e.clientY;
+            action.originalValue = selectedBox.strokeWidth;
+            document.body.classList.add('controls-active');
+        });
+         strokeWidthControl.addEventListener('touchstart', (e) => {
+            if (!selectedBox) return;
+            action.type = 'dragStroke';
+            action.startY = e.touches[0].clientY;
+            action.originalValue = selectedBox.strokeWidth;
+            document.body.classList.add('controls-active');
+        }, { passive: false });
+
+
+        deleteBtn.addEventListener('click', deleteSelectedBox);
+    }
+    
+    // --- INITIALIZATION ---
+    function resizeCanvas() {
+        const rect = mainContainer.getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+    }
+    function init() {
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        setupEventListeners();
+        function animate() {
+            draw();
+            requestAnimationFrame(animate);
+        }
+        animate();
+    }
+    init();
+</script>
+</body>
+</html>
+
